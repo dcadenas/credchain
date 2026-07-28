@@ -162,6 +162,35 @@ See [docs/SECURITY.md](docs/SECURITY.md) and
 [docs/superpowers/specs/2026-07-27-credchain-design.md](docs/superpowers/specs/2026-07-27-credchain-design.md)
 for the full design.
 
+## Migrating from envchain
+
+`scripts/migrate-from-envchain.sh` copies every envchain namespace/variable
+into credchain under the **same** namespace and variable name. The plaintext
+secret transits only through a kernel pipe from `envchain <ns> printenv <VAR>`
+into `credchain --set <ns> <VAR>` — it is never displayed, written to disk,
+placed in argv, or logged (only namespace/variable *names* are printed to
+stderr).
+
+```
+# dry-run: list what would be migrated, copy nothing
+scripts/migrate-from-envchain.sh --dry-run
+
+# migrate everything from `envchain --list`
+scripts/migrate-from-envchain.sh
+
+# migrate only specific namespaces
+scripts/migrate-from-envchain.sh aws github
+```
+
+**Limitations:**
+- A value that itself contains a newline is truncated to its first line
+  (credchain reads one line per `--set`). Most envchain secrets (API keys,
+  tokens) are single-line; PEM/private-key blocks are not and must be
+  re-entered by hand with `--noecho`.
+- envchain's `--require-passphrase` per-item ACL does **not** carry over — the
+  systemd backend has no per-item passphrase concept (see README § Interface
+  compatibility).
+
 ## Testing
 
 ```
