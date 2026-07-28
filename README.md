@@ -34,9 +34,10 @@ cargo install --path .
 cargo build --release && cp target/release/credchain ~/.local/bin/
 ```
 
-`credchain` is a single static binary. It has no runtime library dependency on
-GNOME, libsecret, or D-Bus (only libc and, transitively, systemd-creds which it
-shells out to).
+`credchain` is one executable with no GNOME/libsecret/D-Bus runtime dependency.
+On the default GNU target it is dynamically linked to the ordinary platform
+runtime (`libc`, `libgcc_s`); it is not a static/musl artifact unless a musl
+build is explicitly produced and tested.
 
 ## Usage
 
@@ -165,10 +166,17 @@ for the full design.
 
 ```
 cargo fmt -- --check
-cargo clippy --all-targets --all-features
-cargo test                     # unit tests
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test                     # unit + smoke tests
 bash tests/integration.sh      # black-box contract tests (43 scenarios)
 ```
+
+The integration suite requires systemd ≥ 256 (for `systemd-creds --user`
+encryption); it does **not** run on Ubuntu 24.04 / `ubuntu-latest`
+(systemd 255.4). In CI it runs on `ubuntu-26.04` (currently a
+[public-preview](https://github.com/actions/runner-images) runner image,
+systemd 259.5) after asserting the version. The build/clippy/unit/smoke/release
+job runs on `ubuntu-latest`.
 
 The integration suite uses only conspicuously fake values
 (`credchain-test-secret-not-real-FAKE`) inside isolated `$XDG_DATA_HOME`

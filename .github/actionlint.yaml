@@ -1,0 +1,6 @@
+# actionlint config. ubuntu-26.04 is a real public-preview runner image
+# (https://github.com/actions/runner-images, systemd 259.5) but is not yet in
+# actionlint's static label list.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

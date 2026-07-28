@@ -2,7 +2,7 @@
 
 ```
                 ┌──────────────────────────────────────────────┐
-                │  credchain (single static Rust binary)        │
+                │  credchain (one Rust executable, no GNOME/dbus deps) │
                 │                                              │
    --set ─────► │  input.rs  ──prompt (termios noecho)──► Vec<u8>│
                 │     │                                        │

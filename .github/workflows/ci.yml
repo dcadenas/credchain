@@ -5,20 +5,33 @@ on:
     branches: [master, main]
   pull_request:
 
+# Least privilege: this workflow only reads the repo contents. No secrets,
+# no deployments, no packages.
+permissions:
+  contents: read
+
+concurrency:
+  # One workflow per ref at a time; cancel superseded runs.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  # ---------------------------------------------------------------------
+  # build-and-check: runs on the stable default runner. Does not depend on
+  # systemd-creds, so it works on ubuntu-latest (currently Ubuntu 24.04 /
+  # systemd 255.4).
+  # ---------------------------------------------------------------------
+  build-and-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install systemd-creds
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y systemd
-          systemd-creds --version
+      # Pinned to immutable reviewed commit SHAs. Update by review, not by tag.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt, clippy
 
@@ -28,15 +41,47 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: cargo test (unit)
+      - name: cargo test (unit + smoke)
         run: cargo test
 
-      - name: build
+      - name: cargo build --release
         run: cargo build --release
 
-      - name: black-box integration tests
+  # ---------------------------------------------------------------------
+  # integration: the real fake-secret systemd-creds suite. Requires
+  # systemd >= 256 for `systemd-creds --user` encryption, which is NOT
+  # available on ubuntu-latest (Ubuntu 24.04 ships systemd 255.4). Use the
+  # ubuntu-26.04 runner image (currently a public preview, systemd 259.5)
+  # and assert the version before running.
+  # ---------------------------------------------------------------------
+  integration:
+    runs-on: ubuntu-26.04
+    needs: build-and-check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Assert systemd >= 256
+        run: |
+          set -eu
+          v="$(systemctl --version | awk 'NR==1{print $2}')"
+          echo "systemd version: $v"
+          if [ "$v" -lt 256 ]; then
+            echo "ERROR: credchain requires systemd >= 256 for systemd-creds --user; found $v" >&2
+            exit 1
+          fi
+          systemd-creds --version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: cargo build --release
+        run: cargo build --release
+
+      - name: Black-box integration tests (fake secrets only)
         env:
-          # Run the --noecho pty test headlessly; `script` is available on the
-          # runner via util-linux.
+          # The --noecho pty test uses `script` (util-linux) to allocate a pty.
           TERM: xterm
         run: bash tests/integration.sh
