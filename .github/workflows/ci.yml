@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install systemd-creds
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y systemd
+          systemd-creds --version
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: cargo fmt --check
+        run: cargo fmt -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo test (unit)
+        run: cargo test
+
+      - name: build
+        run: cargo build --release
+
+      - name: black-box integration tests
+        env:
+          # Run the --noecho pty test headlessly; `script` is available on the
+          # runner via util-linux.
+          TERM: xterm
+        run: bash tests/integration.sh

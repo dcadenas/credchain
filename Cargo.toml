@@ -1,0 +1,23 @@
+[package]
+name = "credchain"
+version = "0.1.0"
+edition = "2021"
+authors = ["credchain"]
+license = "MIT"
+description = "Headless local replacement for envchain using systemd-creds user-scoped encrypted credentials"
+homepage = "https://github.com/credchain/credchain"
+repository = "https://github.com/credchain/credchain"
+keywords = ["secrets", "envchain", "systemd", "credentials", "security"]
+categories = ["command-line-utilities", "cryptography"]
+
+[[bin]]
+name = "credchain"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
