@@ -63,8 +63,17 @@ fn run(args: &[String]) -> i32 {
             cmd_exec(&stripped)
         }
         s if s.starts_with('-') && args[0] != "-" => {
-            // Unknown top-level option.
-            eprintln!("credchain: unknown option: {s}");
+            // Unknown top-level option. Flags belonging to a subcommand are a
+            // common ordering mistake (envchain wants them after the
+            // subcommand too), so name the fix instead of only the error.
+            match misplaced_flag_owner(s) {
+                Some(owner) => eprintln!(
+                    "credchain: unknown option: {s}\n\
+                     credchain: {s} is an option of {owner}; it must come after it, \
+                     e.g. `credchain {owner} {s} ...`"
+                ),
+                None => eprintln!("credchain: unknown option: {s}"),
+            }
             print_help();
             2
         }
@@ -107,6 +116,18 @@ fn strip_backend(args: &[String]) -> Vec<String> {
         i += 1;
     }
     out
+}
+
+/// Return the subcommand that owns `flag`, when `flag` is a valid option that
+/// was merely placed before its subcommand rather than after it.
+fn misplaced_flag_owner(flag: &str) -> Option<&'static str> {
+    match flag {
+        "-n" | "--noecho" | "-p" | "--require-passphrase" | "-P" | "--no-require-passphrase" => {
+            Some("--set")
+        }
+        "-v" | "--show-value" => Some("--list"),
+        _ => None,
+    }
 }
 
 fn print_help() {
@@ -466,6 +487,20 @@ mod tests {
     #[test]
     fn empty_args_helps() {
         assert_eq!(run(&[]), 2);
+    }
+
+    #[test]
+    fn misplaced_set_flags_name_their_owner() {
+        assert_eq!(misplaced_flag_owner("--noecho"), Some("--set"));
+        assert_eq!(misplaced_flag_owner("-n"), Some("--set"));
+        assert_eq!(misplaced_flag_owner("--require-passphrase"), Some("--set"));
+        assert_eq!(misplaced_flag_owner("--show-value"), Some("--list"));
+        assert_eq!(misplaced_flag_owner("--nonsense"), None);
+    }
+
+    #[test]
+    fn misplaced_flag_still_exits_two() {
+        assert_eq!(run(&["--noecho".into(), "ns".into(), "VAR".into()]), 2);
     }
 
     #[test]
