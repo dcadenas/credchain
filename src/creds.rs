@@ -27,6 +27,7 @@ use crate::store;
 
 /// Exit/error type carrying a user-facing message. Messages never include
 /// secret material; they only describe the failure.
+#[derive(Debug)]
 pub struct CredError(pub String);
 
 /// Concurrent decrypts per UID. systemd-creds.socket uses
@@ -105,28 +106,39 @@ pub fn decrypt_to_memory(cred_name: &str, path: &Path) -> Result<Vec<u8>, CredEr
 }
 
 fn decrypt_cipher_with_retry(cred_name: &str, cipher: &[u8]) -> Result<Vec<u8>, CredError> {
-    let mut last_transport: Option<String> = None;
-    for attempt in 0..TRANSPORT_ATTEMPTS {
-        match decrypt_cipher_once(cred_name, cipher) {
+    decrypt_cipher_with_retry_using(cipher, |c| decrypt_cipher_once(cred_name, c), thread::sleep)
+}
+
+fn decrypt_cipher_with_retry_using<A, S>(
+    cipher: &[u8],
+    mut attempt: A,
+    mut sleeper: S,
+) -> Result<Vec<u8>, CredError>
+where
+    A: FnMut(&[u8]) -> Result<Vec<u8>, DecryptAttemptError>,
+    S: FnMut(Duration),
+{
+    let mut last_transport = String::new();
+    for attempt_n in 0..TRANSPORT_ATTEMPTS {
+        match attempt(cipher) {
             Ok(plain) => return Ok(plain),
             Err(DecryptAttemptError::Spawn(msg) | DecryptAttemptError::Wait(msg)) => {
                 return Err(CredError(msg));
             }
             Err(DecryptAttemptError::Failed(stderr)) => {
                 let class = classify_decrypt_stderr(&stderr);
-                if class == DecryptClass::Transport && attempt + 1 < TRANSPORT_ATTEMPTS {
-                    last_transport = Some(stderr);
-                    thread::sleep(transport_backoff(attempt));
+                if class == DecryptClass::Transport && attempt_n + 1 < TRANSPORT_ATTEMPTS {
+                    last_transport = stderr;
+                    sleeper(transport_backoff(attempt_n));
                     continue;
                 }
                 return Err(CredError(decrypt_failure_message(class, &stderr)));
             }
         }
     }
-    let stderr = last_transport.unwrap_or_default();
     Err(CredError(decrypt_failure_message(
         DecryptClass::Transport,
-        &stderr,
+        &last_transport,
     )))
 }
 
@@ -147,11 +159,11 @@ fn decrypt_cipher_once(cred_name: &str, cipher: &[u8]) -> Result<Vec<u8>, Decryp
             DecryptAttemptError::Spawn(format!("failed to run systemd-creds decrypt: {e}"))
         })?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(cipher).map_err(|e| {
-            DecryptAttemptError::Spawn(format!("failed to pipe ciphertext to systemd-creds: {e}"))
-        })?;
-    }
+    let write_err = if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(cipher).err()
+    } else {
+        None
+    };
     drop(child.stdin.take());
 
     let output = child.wait_with_output().map_err(|e| {
@@ -159,11 +171,32 @@ fn decrypt_cipher_once(cred_name: &str, cipher: &[u8]) -> Result<Vec<u8>, Decryp
     })?;
 
     if !output.status.success() {
-        return Err(DecryptAttemptError::Failed(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
+        let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        if stderr.trim().is_empty() && write_err.as_ref().is_some_and(is_pipe_transport) {
+            stderr = "Failed to call Decrypt() varlink call.".to_string();
+        }
+        return Err(DecryptAttemptError::Failed(stderr));
+    }
+    if let Some(e) = write_err {
+        if is_pipe_transport(&e) {
+            return Err(DecryptAttemptError::Failed(
+                "Failed to call Decrypt() varlink call.".into(),
+            ));
+        }
+        return Err(DecryptAttemptError::Spawn(format!(
+            "failed to pipe ciphertext to systemd-creds: {e}"
+        )));
     }
     Ok(output.stdout)
+}
+
+fn is_pipe_transport(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,10 +216,11 @@ fn classify_decrypt_stderr(stderr: &str) -> DecryptClass {
         return DecryptClass::BadFormat;
     }
     if stderr.contains("Decryption failed (incorrect key?)")
-        || stderr.contains("Unexpected PCR")
+        || stderr.contains("Unexpected TPM PCR state of the system.")
         || stderr.contains("dictionary lockout")
         || stderr.contains("belongs to another TPM")
-        || stderr.contains("Couldn't find PCR signature")
+        || stderr.contains("PCR signature required for decryption, but could not be found.")
+        || stderr.contains("Couldn't find PCR signature file")
         || stderr.contains("Failed to unseal")
     {
         return DecryptClass::Crypto;
@@ -426,5 +460,83 @@ mod tests {
         for attempt in 0..TRANSPORT_ATTEMPTS {
             assert!(transport_backoff(attempt) >= Duration::from_millis(TRANSPORT_BACKOFF_BASE_MS));
         }
+    }
+
+    #[test]
+    fn retries_transport_then_succeeds() {
+        let mut n = 0;
+        let result = decrypt_cipher_with_retry_using(
+            b"cipher",
+            |_| {
+                n += 1;
+                if n < 3 {
+                    Err(DecryptAttemptError::Failed(
+                        "Failed to call Decrypt() varlink call.".into(),
+                    ))
+                } else {
+                    Ok(b"plain".to_vec())
+                }
+            },
+            |_| {},
+        );
+        assert_eq!(result.unwrap(), b"plain");
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn does_not_retry_name_mismatch() {
+        let mut n = 0;
+        let err = decrypt_cipher_with_retry_using(
+            b"cipher",
+            |_| {
+                n += 1;
+                Err(DecryptAttemptError::Failed(
+                    "Name in credential doesn't match expectations.".into(),
+                ))
+            },
+            |_| {},
+        )
+        .err()
+        .unwrap();
+        assert!(err.0.contains("name mismatch"), "{}", err.0);
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn transport_retries_exhaust_fail_closed() {
+        let mut n = 0;
+        let mut sleeps = 0u32;
+        let err = decrypt_cipher_with_retry_using(
+            b"cipher",
+            |_| {
+                n += 1;
+                Err(DecryptAttemptError::Failed(
+                    "Failed to connect to io.systemd.Credentials".into(),
+                ))
+            },
+            |_| {
+                sleeps += 1;
+            },
+        )
+        .err()
+        .unwrap();
+        assert!(err.0.contains("varlink transport"), "{}", err.0);
+        assert!(!err.0.to_lowercase().contains("corrupt"), "{}", err.0);
+        assert_eq!(n, TRANSPORT_ATTEMPTS as i32);
+        assert_eq!(sleeps, TRANSPORT_ATTEMPTS - 1);
+    }
+
+    #[test]
+    fn user_scope_pcr_ipc_strings_are_crypto() {
+        assert_eq!(
+            classify_decrypt_stderr("Unexpected TPM PCR state of the system."),
+            DecryptClass::Crypto
+        );
+        assert_eq!(
+            classify_decrypt_stderr(
+                "PCR signature required for decryption, but could not be found."
+            ),
+            DecryptClass::Crypto
+        );
     }
 }
