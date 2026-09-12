@@ -21,7 +21,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::store;
 
@@ -37,6 +37,12 @@ const DECRYPT_SLOTS: u32 = 4;
 const TRANSPORT_ATTEMPTS: u32 = 5;
 const TRANSPORT_BACKOFF_BASE_MS: u64 = 25;
 const TRANSPORT_BACKOFF_CAP_MS: u64 = 400;
+/// How long to wait for a decrypt slot before failing closed as transport.
+/// Long enough for a cold-boot wave of decrypts to drain, short enough that a
+/// wedged `systemd-creds` child cannot stall every caller indefinitely.
+const DECRYPT_SLOT_WAIT_MAX_MS: u64 = 120_000;
+/// Poll interval while every slot is busy.
+const DECRYPT_SLOT_POLL_MS: u64 = 20;
 
 /// Encrypt `plaintext` bytes to `out_path` under the given credential name.
 /// Uses the user-scoped default key (`--with-key=auto` under `--user`).
@@ -101,7 +107,7 @@ pub fn decrypt_to_memory(cred_name: &str, path: &Path) -> Result<Vec<u8>, CredEr
         ))
     })?;
 
-    let _slot = acquire_decrypt_slot();
+    let _slot = acquire_decrypt_slot()?;
     decrypt_cipher_with_retry(cred_name, &cipher)
 }
 
@@ -269,28 +275,57 @@ struct DecryptSlot {
     _file: File,
 }
 
-fn acquire_decrypt_slot() -> Option<DecryptSlot> {
-    let dir = decrypt_lock_dir()?;
+fn acquire_decrypt_slot() -> Result<Option<DecryptSlot>, CredError> {
+    let Some(dir) = decrypt_lock_dir() else {
+        return Ok(None);
+    };
     if ensure_lock_dir(&dir).is_err() {
-        return None;
+        return Ok(None);
     }
+    acquire_decrypt_slot_in(&dir, Duration::from_millis(DECRYPT_SLOT_WAIT_MAX_MS))
+}
+
+fn acquire_decrypt_slot_in(
+    dir: &Path,
+    wait_max: Duration,
+) -> Result<Option<DecryptSlot>, CredError> {
     let mut files = Vec::with_capacity(DECRYPT_SLOTS as usize);
     for i in 0..DECRYPT_SLOTS {
         let path = dir.join(format!("decrypt.slot.{i}"));
         let file = match open_lock_file(&path) {
             Ok(f) => f,
-            Err(_) => return None,
+            Err(_) => return Ok(None),
         };
         if flock(&file, true).is_ok() {
-            return Some(DecryptSlot { _file: file });
+            return Ok(Some(DecryptSlot { _file: file }));
         }
         files.push(file);
     }
-    let idx = (std::process::id() as usize) % files.len();
-    let file = files.swap_remove(idx);
-    drop(files);
-    flock(&file, false).ok()?;
-    Some(DecryptSlot { _file: file })
+
+    // Every slot is busy. Poll with a deadline instead of a blocking flock, so
+    // a wedged `systemd-creds` child cannot stall every caller forever.
+    let deadline = Instant::now() + wait_max;
+    loop {
+        let mut acquired: Option<usize> = None;
+        for (idx, file) in files.iter().enumerate() {
+            if flock(file, true).is_ok() {
+                acquired = Some(idx);
+                break;
+            }
+        }
+        if let Some(idx) = acquired {
+            let file = files.swap_remove(idx);
+            drop(files);
+            return Ok(Some(DecryptSlot { _file: file }));
+        }
+        if Instant::now() >= deadline {
+            return Err(CredError(decrypt_failure_message(
+                DecryptClass::Transport,
+                &format!("per-user decrypt queue busy (waited {wait_max:?})"),
+            )));
+        }
+        thread::sleep(Duration::from_millis(DECRYPT_SLOT_POLL_MS));
+    }
 }
 
 fn decrypt_lock_dir() -> Option<PathBuf> {
@@ -538,5 +573,45 @@ mod tests {
             ),
             DecryptClass::Crypto
         );
+    }
+
+    fn test_lock_dir(label: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("credchain-test-{label}-{}", std::process::id()));
+        p
+    }
+
+    #[test]
+    fn slot_wait_times_out_as_transport_not_corrupt() {
+        let dir = test_lock_dir("slot-timeout");
+        fs::create_dir_all(&dir).unwrap();
+        let held: Vec<File> = (0..DECRYPT_SLOTS)
+            .map(|i| open_lock_file(&dir.join(format!("decrypt.slot.{i}"))).unwrap())
+            .collect();
+        for f in &held {
+            flock(f, true).unwrap();
+        }
+
+        let started = Instant::now();
+        let err = acquire_decrypt_slot_in(&dir, Duration::from_millis(60))
+            .err()
+            .expect("all slots held, expected timeout");
+        assert!(started.elapsed() >= Duration::from_millis(60));
+        assert!(
+            !err.0.to_lowercase().contains("corrupt"),
+            "queue timeout labeled corrupt: {}",
+            err.0
+        );
+        assert!(
+            err.0.contains("credentials service unavailable"),
+            "{}",
+            err.0
+        );
+
+        drop(held);
+        let slot = acquire_decrypt_slot_in(&dir, Duration::from_secs(1)).unwrap();
+        assert!(slot.is_some(), "released slot should be acquired");
+        drop(slot);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
