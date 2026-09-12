@@ -210,6 +210,12 @@ The integration suite uses only conspicuously fake values
 (`credchain-test-secret-not-real-FAKE`) inside isolated `$XDG_DATA_HOME`
 temp dirs. It never touches real host credential state.
 
+## Credits
+
+credchain reuses [envchain](https://github.com/sorah/envchain)'s public
+command-line interface by design (MIT, © Sorah Fukumori). credchain is
+independent of envchain and is not affiliated with its authors.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

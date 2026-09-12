@@ -19,10 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-# Attribution
-
-credchain is a headless local replacement for envchain
-(https://github.com/sorah/envchain, MIT, © Sorah Fukumori) and reuses its
-public command-line interface by design. credchain is independent of envchain
-and is not affiliated with its authors.
