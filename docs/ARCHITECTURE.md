@@ -64,5 +64,4 @@
 ## See also
 
 - [SECURITY.md](SECURITY.md) — threat model, fail-closed behavior, limits.
-- [superpowers/specs/2026-07-27-credchain-design.md](superpowers/specs/2026-07-27-credchain-design.md)
-  — full design and decision rationale.
+- [DESIGN.md](DESIGN.md) — full design and decision rationale.

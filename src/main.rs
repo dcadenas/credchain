@@ -8,8 +8,8 @@
 //!   credchain (--unset|-u) NAMESPACE ENV [ENV ..]
 //!   credchain [--backend=systemd] NAMESPACE[,NAMESPACE...] COMMAND [ARG ...]
 //!
-//! See docs/superpowers/specs/2026-07-27-credchain-design.md for the full
-//! design, security boundary, and intentional incompatibilities.
+//! See docs/DESIGN.md for the full design, security boundary, and intentional
+//! incompatibilities.
 
 mod creds;
 mod exec;

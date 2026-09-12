@@ -21,10 +21,10 @@ machine-id. No `setup`, no root, no polkit, no D-Bus.
 
 ## Requirements
 
-- Linux with systemd ≥ 256 (user-scoped credentials; `--user` encryption). This
-  host runs systemd 261.
+- Linux with systemd ≥ 256 (user-scoped credentials; `--user` encryption).
+  Tested with systemd 261.
 - `systemd-creds` on `$PATH`.
-- A Rust toolchain to build (or use a released binary).
+- A Rust toolchain to build.
 
 ## Install
 
@@ -158,8 +158,7 @@ ExecStart=credchain aws /usr/local/bin/myjob
   name mismatches, missing files, NUL values, and invalid names all produce a
   nonzero exit with no secret rendered.
 
-See [docs/SECURITY.md](docs/SECURITY.md) and
-[docs/superpowers/specs/2026-07-27-credchain-design.md](docs/superpowers/specs/2026-07-27-credchain-design.md)
+See [docs/SECURITY.md](docs/SECURITY.md) and [docs/DESIGN.md](docs/DESIGN.md)
 for the full design.
 
 ## Migrating from envchain

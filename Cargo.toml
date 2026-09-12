@@ -2,9 +2,10 @@
 name = "credchain"
 version = "0.1.0"
 edition = "2021"
-authors = ["credchain"]
 license = "MIT"
 description = "Headless local replacement for envchain using systemd-creds user-scoped encrypted credentials"
+repository = "https://github.com/dcadenas/credchain"
+readme = "README.md"
 keywords = ["secrets", "envchain", "systemd", "credentials", "security"]
 categories = ["command-line-utilities", "cryptography"]
 

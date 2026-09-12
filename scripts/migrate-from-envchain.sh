@@ -38,15 +38,23 @@
 # Exit status: 0 if everything migrated; non-zero if any variable failed.
 set -euo pipefail
 
+# Bounded, value-free diagnostic files. mktemp keeps them out of a predictable
+# shared path; the trap removes them on every exit.
+ENVCHAIN_ERR="$(mktemp "${TMPDIR:-/tmp}/envchain-migrate.XXXXXX")"
+CREDCHAIN_ERR="$(mktemp "${TMPDIR:-/tmp}/credchain-migrate.XXXXXX")"
+trap 'rm -f "$ENVCHAIN_ERR" "$CREDCHAIN_ERR"' EXIT
+
 DRY_RUN=0
 EXPLICIT_NS=()
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift;;
-    --namespace) EXPLICIT_NS+=("$2"); shift 2;;
+    --namespace)
+      [ "$#" -ge 2 ] || { echo "--namespace requires a value" >&2; exit 2; }
+      EXPLICIT_NS+=("$2"); shift 2;;
     -h|--help)
-      sed -n '2,40p' "$0"; exit 0;;
+      sed -n '2,38p' "$0"; exit 0;;
     --) shift; break;;
     -*) echo "unknown option: $1" >&2; exit 2;;
     *) EXPLICIT_NS+=("$1"); shift;;
@@ -75,12 +83,12 @@ migrate_var() {
   # stdin and re-encrypts. No tmpfile, no echo, no argv carries the value.
   # `printenv <VAR>` prints `VALUE\n`; credchain --set reads one line and strips
   # the trailing newline.
-  if ! "$ENVCHAIN_BIN" "$ns" printenv "$var" 2>/tmp/envchain-migrate.err \
-        | "$CREDCHAIN_BIN" --set "$ns" "$var" >/dev/null 2>/tmp/credchain-migrate.err; then
-    echo "FAIL: $ns/$var (envchain or credchain error; see /tmp/*-migrate.err)" >&2
+  if ! "$ENVCHAIN_BIN" "$ns" printenv "$var" 2>"$ENVCHAIN_ERR" \
+        | "$CREDCHAIN_BIN" --set "$ns" "$var" >/dev/null 2>"$CREDCHAIN_ERR"; then
+    echo "FAIL: $ns/$var (envchain or credchain error)" >&2
     # Surface a bounded, value-free error snippet.
-    sed 's/.*/&/; q8' /tmp/envchain-migrate.err 2>/dev/null | head -3 >&2 || true
-    sed 's/.*/&/; q8' /tmp/credchain-migrate.err 2>/dev/null | head -3 >&2 || true
+    head -3 "$ENVCHAIN_ERR" 2>/dev/null >&2 || true
+    head -3 "$CREDCHAIN_ERR" 2>/dev/null >&2 || true
     fail=$((fail+1))
     return 1
   fi
