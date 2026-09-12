@@ -41,6 +41,9 @@ credchain exits nonzero and does **not** run the child when:
 - a `.cred` entry is a symlink or non-regular file,
 - ciphertext is malformed, the embedded name does not match, or the file is
   missing,
+- decrypt cannot reach `io.systemd.Credentials` after bounded transport retries,
+  or waits past the bounded per-user decrypt queue limit
+  (varlink congestion is not treated as corrupt ciphertext),
 - the target command cannot be `execvp`'d.
 
 In none of these cases is secret material rendered in the error message.
